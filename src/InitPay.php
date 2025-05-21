@@ -21,10 +21,17 @@ class InitPay
 
     /**
      * Create a new payment request
+     * Only returns the checkout URL (for security)
      */
-    public function createPayment(array $data): array
+    public function createPayment(array $data): string
     {
-        return $this->post('create_payment', $data);
+        $response = $this->post('create_payment', $data);
+
+        if (!isset($response['checkout_url'])) {
+            throw new Exception('Invalid response from InitPay-ck');
+        }
+
+        return $response['checkout_url'];
     }
 
     /**
