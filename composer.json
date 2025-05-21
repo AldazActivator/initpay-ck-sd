@@ -1,0 +1,20 @@
+{
+  "name": "initpay/ck",
+  "description": "Official PHP SDK for InitPay-ck: Plug. Pay. Done.",
+  "type": "library",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "InitPay",
+      "email": "aldazactivator@gmail.com"
+    }
+  ],
+  "autoload": {
+    "psr-4": {
+      "InitPayCK\\": "src/"
+    }
+  },
+  "require": {
+    "php": ">=7.4"
+  }
+}
