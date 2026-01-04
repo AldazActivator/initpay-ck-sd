@@ -1,85 +1,127 @@
 <?php
 
-namespace InitPayCK;
+namespace App\Payment;
 
-use Exception;
-
-class InitPay
+class InitPayClient
 {
-    private string $apiKey;
-    private string $binanceKey;
-    private string $binanceSecret;
-    private string $endpoint;
+    private $gatewayUrl = "https://pay.bysel.us/api/create_payment";
+    private $params;
+    private $payload = [];
+    private $rawResponse = null;
+    private $httpCode = null;
 
-    public function __construct(string $apiKey, string $binanceKey, string $binanceSecret, string $endpoint = 'https://pay.bysel.us/api/')
+    public function __construct(array $params)
     {
-        $this->apiKey = $apiKey;
-        $this->binanceKey = $binanceKey;
-        $this->binanceSecret = $binanceSecret;
-        $this->endpoint = rtrim($endpoint, '/') . '/';
+        $this->params = $params;
     }
 
     /**
-     * Create a new payment request
-     * Only returns the checkout URL (for security)
+     * Construye el payload de la orden
      */
-    public function createPayment(array $data): string
+    public function buildPayload(int $invoiceId, float $total, float $amountBase, float $fee): self
     {
-        $response = $this->post('create_payment', $data);
+        $currency = strtolower($this->params['currency'] ?? 'usdt');
+        $firstName = $this->params['clientdetails']['firstname'] ?? 'undefine';
+        $lastName  = $this->params['clientdetails']['lastname'] ?? 'undefine';
+        $email     = $this->params['clientdetails']['email'] ?? 'undefine@example.com';
 
-        if (!isset($response['checkout_url'])) {
-            throw new Exception('Invalid response from InitPay-ck');
-        }
-
-        return $response['checkout_url'];
-    }
-
-    /**
-     * Validate the HMAC signature of a webhook
-     */
-    public static function isValidWebhook(array $headers, string $rawBody, string $secret): bool
-    {
-        if (!isset($headers['X-InitPay-Signature'])) {
-            return false;
-        }
-        $calculated = hash_hmac('sha256', $rawBody, $secret);
-        return hash_equals($headers['X-InitPay-Signature'], $calculated);
-    }
-
-    /**
-     * Send a POST request to the InitPay-ck API
-     */
-    private function post(string $path, array $payload): array
-    {
-        $url = $this->endpoint . $path;
-
-        $headers = [
-            'Authorization: Bearer ' . $this->apiKey,
-            'Content-Type: application/json',
-            'X-Binance-Command-AuthToken: ' . base64_encode($this->binanceKey . ':' . $this->binanceSecret)
+        $this->payload = [
+            'order_id'       => md5($invoiceId),
+            'invoice_number' => $invoiceId,
+            'amount'         => $total,
+            'currency'       => $currency,
+            'note'           => $invoiceId,
+            'brand'          => 'YOUR_BRAND_NAME',
+            'customer_name'  => $firstName . ' ' . $lastName,
+            'description'    => "Base: $amountBase USDT + Fee: $fee",
+            'billing_fname'  => $firstName,
+            'billing_lname'  => $lastName,
+            'billing_email'  => $email,
+            'redirect_url'   => $this->params['redirect_url'] ?? ($this->params['systemurl'] . 'your_redirect_url.php?id=' . $invoiceId),
+            'cancel_url'     => $this->params['cancel_url'] ?? ($this->params['systemurl'] . 'your_redirect_url.php?id=' . $invoiceId),
+            'webhook_url'    => $this->params['systemurl'] . '/API/initpay_webhook.php',
+            'type'           => 'dhru',
+            'items'          => [
+                [
+                    'name'  => 'Invoice #' . $invoiceId,
+                    'qty'   => 1,
+                    'price' => $total,
+                ]
+            ]
         ];
 
-        $ch = curl_init($url);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        return $this;
+    }
+
+    /**
+     * Ejecuta la solicitud al gateway
+     */
+    public function generateLink(): array
+    {
+        $authEncoded = base64_encode(
+            trim($this->params['init_key']) . ':' . trim($this->params['init_secret'])
+        );
+
+        $headers = [
+            'Content-Type: application/json',
+            'X-InitPay-Authorization: ' . $authEncoded
+        ];
+
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $this->gatewayUrl,
+            CURLOPT_POST           => true,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POSTFIELDS     => json_encode($this->payload),
+            CURLOPT_HTTPHEADER     => $headers,
+        ]);
 
         $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-
-        if (curl_errno($ch)) {
-            throw new Exception('Curl error: ' . curl_error($ch));
-        }
-
+        $this->httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
-        $decoded = json_decode($response, true);
+        $this->rawResponse = $response;
 
-        if ($httpCode >= 400) {
-            throw new Exception('API error: ' . ($decoded['error'] ?? 'Unknown error'));
-        }
+        // Logging (debug)
+        //$this->logDebug($this->payload, $response);
 
-        return $decoded;
+        return json_decode($response, true) ?? [];
+    }
+
+    /**
+     * Genera un identificador único para el campo "note"
+     */
+    private function generateUniqueNote(): string
+    {
+        return str_pad((string)random_int(0, 99999), 5, '0', STR_PAD_LEFT);
+    }
+
+
+    /**
+     * Guarda payload y respuesta en un log
+     */
+    private function logDebug(array $payload, string $response): void
+    {
+        $logFile = __DIR__ . '/initpay_debug.log';
+        $content = date('Y-m-d H:i:s') . "\nPayload:\n" .
+            json_encode($payload, JSON_PRETTY_PRINT) .
+            "\nResponse:\n$response\n\n";
+        file_put_contents($logFile, $content, FILE_APPEND);
+    }
+
+    // --- Getters útiles ---
+    public function getRawResponse(): ?string
+    {
+        return $this->rawResponse;
+    }
+
+    public function getHttpCode(): ?int
+    {
+        return $this->httpCode;
+    }
+
+    public function getPayload(): array
+    {
+        return $this->payload;
     }
 }
